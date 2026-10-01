@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- 改这里①：字体与配色主题（风格自由，见 references/style-cards.md） -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700;900&display=swap" rel="stylesheet">
+<title>video-shot</title>
+<style>
+  /* ========== 底盘 · 不动 ========== */
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { background:#000; overflow:hidden; width:100%; height:100%;
+    font-family:"Noto Sans SC","Microsoft YaHei",sans-serif; }
+  #stage { position:fixed; left:50%; top:50%; width:1920px; height:1080px;
+    transform:translate(-50%,-50%) scale(var(--scene-scale,1));
+    transform-origin:center; overflow:hidden; background:#0d1428; box-shadow:0 0 0 60px #000; }
+  #cam { position:absolute; inset:0; }
+  .letter { position:absolute; left:0; right:0; height:74px; background:#000; z-index:40; opacity:0; transition:opacity .3s; }
+  #lbT { top:0; } #lbB { bottom:0; }
+  #dim { position:absolute; inset:0; z-index:39; pointer-events:none;
+    background:radial-gradient(120% 120% at 50% 50%, transparent 55%, rgba(0,0,0,.55) 100%); opacity:0; transition:opacity .3s; }
+  .corner { position:absolute; right:24px; bottom:18px; z-index:42; font-size:13px;
+    color:rgba(255,255,255,.5); letter-spacing:.5px; font-variant-numeric:tabular-nums; }
+  #hud { position:absolute; left:0; right:0; bottom:0; z-index:50; height:60px;
+    background:linear-gradient(0deg, rgba(0,0,0,.85), transparent);
+    display:flex; align-items:flex-end; justify-content:space-between; padding:0 26px 14px;
+    opacity:0; transition:opacity .25s; pointer-events:none; }
+  #stage:hover #hud { opacity:1; pointer-events:auto; }
+  #hud .progress { position:absolute; top:0; left:0; height:3px; width:0%; background:#5ac8ff;
+    box-shadow:0 0 8px rgba(90,200,255,.8); }
+  #hud .tc { font-size:14px; color:#cfe; font-variant-numeric:tabular-nums; letter-spacing:1px; }
+  #hud button { background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.3); color:#fff;
+    border-radius:6px; padding:6px 16px; font-size:14px; cursor:pointer; margin-left:10px; }
+  #hud button:hover { background:rgba(255,255,255,.2); }
+  #boot { position:absolute; inset:0; z-index:60; background:#000; display:flex;
+    align-items:center; justify-content:center; flex-direction:column; cursor:pointer; }
+  #boot .go { font-size:44px; font-weight:900; letter-spacing:8px; color:#fff; animation:flash 1.6s infinite; }
+  #boot .hint { margin-top:18px; font-size:15px; color:rgba(255,255,255,.45); letter-spacing:3px; }
+  #boot.off { opacity:0; pointer-events:none; transition:opacity .6s; }
+  @keyframes flash { 0%,100%{opacity:1;} 50%{opacity:.25;} }
+  /* URL 参数驱动（供 probe/render 与无人值守录制使用）：
+     ?noboot=1 直接跳过启动遮罩   ?nohud=1 不显示 HUD   ?notc=1 隐藏角注 */
+  html.noboot #boot { display:none !important; }
+  html.nohud #hud { display:none !important; }
+  html.notc .corner { display:none !important; }
+
+  /* ============================================================
+     改这里②：画面层 CSS（世界观风格自由发挥）
+     ============================================================ */
+  #scene { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; }
+  #title { font-size:96px; font-weight:900; letter-spacing:6px; color:#fff; opacity:0;
+    transform:translateY(24px); transition:opacity .7s ease,transform .7s ease; }
+  #title.in { opacity:1; transform:none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="cam">
+    <!-- 改这里③：本镜头全部画面 HTML（世界观风格自由发挥） -->
+    <div id="scene">
+      <h1 id="title">镜头标题</h1>
+    </div>
+  </div>
+  <div id="dim"></div>
+  <div class="letter" id="lbT"></div><div class="letter" id="lbB"></div>
+  <div class="corner" id="corner">数据来源：______</div>
+  <div id="hud">
+    <div class="progress" id="prog"></div>
+    <div class="tc" id="tc">00:00 / 00:00</div>
+    <div><button id="pauseBtn">暂停</button><button id="replayBtn">重播</button></div>
+  </div>
+  <div id="boot"><div class="go">启 动 播 放</div><div class="hint">CLICK TO PLAY</div></div>
+</div>
+
+<script>
+/* ============================================================
+   底盘 · 不动：虚拟时钟 / 启动 / 时间轴 / 镜头调度 / 音效 / HUD
+   ============================================================ */
+(function(){
+  const q = new URLSearchParams(location.search);
+  const AUTOPLAY = q.get("auto") === "1" || q.get("autoplay") === "1";
+  /* 改这里④：镜头时长（毫秒） */
+  const DUR = Number(q.get("dur")) || 9500;
+  const W = 1920, H = 1080;
+  /* 黑场淡出时长（毫秒）。启动遮罩的淡出必须与时钟起点对齐，
+     否则 render/probe 的第一帧会拍到还没淡完的遮罩。 */
+  const BOOT_FADE = 600;
+
+  /* 显示开关：质检与无人值守录制用 URL 参数直接跳过遮罩/HUD，不必再注入样式 */
+  if (q.get("noboot") === "1") document.documentElement.classList.add("noboot");
+  if (q.get("nohud") === "1") document.documentElement.classList.add("nohud");
+  if (q.get("notc") === "1") document.documentElement.classList.add("notc");
+
+  /* 虚拟时钟：先保存真实时钟，再劫持。__now 为演出时间。 */
+  const _realNow = window.performance.now.bind(window.performance);
+  let __now = 0, _playing = false, _last = 0, _cueT = null;
+  const raf = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = (cb) => raf((ts) => cb(__now));
+  function startClock(){ _last = _realNow(); _tick(); }
+  function _tick(){
+    if (!_playing) return;
+    const n = _realNow(), dt = n - _last; _last = n;
+    __now += dt;
+    window.dispatchEvent(new CustomEvent("vtick", { detail: __now }));
+    _syncHUD();
+    raf(_tick);
+  }
+
+  function fit(){
+    const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+    document.documentElement.style.setProperty("--scene-scale", s);
+  }
+  window.addEventListener("resize", fit); fit();
+
+  const boot = document.getElementById("boot");
+  function begin(){
+    if (_playing) return; _playing = true;
+    // ?noboot=1：没有可见遮罩可淡出，直接起时钟，省掉一次等待
+    if (document.documentElement.classList.contains("noboot")) {
+      boot.style.display = "none"; startClock(); return;
+    }
+    boot.classList.add("off");
+    // 等遮罩真正淡完再让时钟走：否则第一帧拍到的还是遮罩（旧版 setTimeout 700ms
+    // 与 600ms 过渡 + 首帧耗时叠加，会拍到半透明黑场）。
+    let started = false;
+    const go = () => {
+      if (started) return; started = true;
+      boot.style.display = "none";
+      startClock();
+    };
+    boot.addEventListener("transitionend", go, { once: true });
+    setTimeout(go, BOOT_FADE + 200);   // 过渡事件缺失时的兜底
+  }
+  boot.addEventListener("click", begin);
+  document.addEventListener("keydown", e => { if (e.key === " " || e.key === "Enter") begin(); });
+
+  /* ========== 音效引擎（合成原语） ========== */
+  let AC = null, master = null;
+  function ctx(){
+    if (!AC){ AC = new (window.AudioContext || window.webkitAudioContext)();
+      master = AC.createGain(); master.gain.value = 0.24; master.connect(AC.destination); }
+    if (AC.state === "suspended") AC.resume();
+    return AC;
+  }
+  function tone(freq, dur, vol, type, t0){
+    try {
+      const c = ctx(), t = t0 || c.currentTime;
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = type || "sine"; o.frequency.value = freq;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(vol, t + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(master);
+      o.start(t); o.stop(t + dur + 0.05);
+    } catch(e){}
+  }
+  window.sfx = {
+    pop()   { tone(660, .14, .5, "sine"); },
+    whoosh(){ tone(220, .32, .32, "sawtooth"); tone(520, .26, .22, "sine", ctx().currentTime + .02); },
+    swipe() { tone(340, .08, .4, "square"); tone(560, .08, .3, "square", ctx().currentTime + .04); },
+    type()  { tone(880, .05, .18, "square"); tone(1320, .04, .12, "square", ctx().currentTime + .012); },
+    ding()  { tone(880, .28, .7, "sine"); tone(1174, .3, .5, "sine", ctx().currentTime + .12); },
+    thud()  { tone(120, .16, .8, "triangle"); tone(60, .22, .6, "sine", ctx().currentTime + .01); },
+  };
+
+  /* ========== 时间轴 ========== */
+  const cbs = new Map();
+  window.on = (ms, fn, ctxM) => cbs.set(ms, ctxM ? fn.bind(ctxM) : fn);
+  window.after = (ms, fn) => cbs.set(Math.round(__now) + ms, fn);
+  // 每个 cue 触发时记下"演出时间"。做确定性渲染时，这一段内新建的 CSS 过渡要按
+  // 『已流逝 = 当前帧 - 本 cue 触发时刻』来 seek，否则会把过渡锚到 0，跳过真实中间态。
+  let _lastCueAt = 0;
+  window.addEventListener("vtick", (e) => {
+    const t = e.detail;
+    for (const [key, f] of cbs){ if (key <= t){ cbs.delete(key); _cueT = key; _lastCueAt = t; f && f(); } }
+    _cueT = null;
+  });
+  /* 供 probe/render 使用：把 CSS 过渡与关键帧动画 seek 到"当前帧"。
+     必须在 __vtick 之后再调一次（本轮 cue 新建的过渡才能被算进去）。 */
+  window.__seekCss = function(ms){
+    if (!document.getAnimations) return 0;
+    let n = 0;
+    for (const a of document.getAnimations()){
+      try {
+        const timing = a.effect && a.effect.getComputedTiming ? a.effect.getComputedTiming() : null;
+        if (timing && timing.iterations === Infinity){ a.cancel(); continue; }  // 无限动画无法定格，停用
+        a.pause();
+        a.currentTime = Math.max(0, ms - _lastCueAt);   // 只 seek 已流逝的部分，不越到未来
+        n++;
+      } catch (err) {}
+    }
+    return n;
+  };
+
+  /* ========== 镜头调度 ========== */
+  const cam = document.getElementById("cam");
+  let _k = null;
+  function camTo(tx, ty, scale, dur){
+    if (_k) cancelAnimationFrame(_k);
+    const m = (cam.style.transform || "").match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)\s*scale\(([\d.]+)\)/);
+    const bx = m ? +m[1] : 0, by = m ? +m[2] : 0, bs = m ? +m[3] : 1;
+    const t0 = _cueT == null ? __now : _cueT; sfx.whoosh();
+    (function step(){
+      const k = Math.min(1, (__now - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+      const x = bx + (tx - bx) * e, y = by + (ty - by) * e, s = bs + (scale - bs) * e;
+      cam.style.transform = "translate(" + x + "px," + y + "px) scale(" + s + ")";
+      if (k < 1) _k = raf(step);
+    })();
+  }
+  function camFocus(fx, fy, scale, dur){
+    scale = scale || 1.12; dur = dur || 900;
+    const halfW = W / 2 / scale, halfH = H / 2 / scale;
+    const tx = Math.max(-W + halfW, Math.min(0, W - halfW - fx));
+    const ty = Math.max(-H + halfH, Math.min(0, H - halfH - fy));
+    camTo(tx, ty, scale, dur);
+  }
+  window.camTo = camTo; window.camFocus = camFocus;
+
+  /* ========== 数字滚动 / 通用补间（虚拟时钟驱动，可被 __vtick 快进并定格） ========== */
+  function tween(from, to, dur, fn, ease){
+    ease = ease || function(k){ return 1 - Math.pow(1 - k, 3); };
+    const t0 = _cueT == null ? __now : _cueT;
+    (function step(){
+      const k = dur > 0 ? Math.min(1, (__now - t0) / dur) : 1;
+      fn(from + (to - from) * ease(k), k);
+      if (k < 1) raf(step);
+    })();
+  }
+  function cnt(from, to, dur, opts){
+    opts = opts || {};
+    const dec = opts.dec == null ? 0 : opts.dec;
+    const el = typeof opts.el === "string" ? document.querySelector(opts.el) : opts.el;
+    tween(from, to, dur, function(v, k){
+      if (el) el.textContent = v.toFixed(dec);
+      if (opts.onUpdate) opts.onUpdate(v, k);
+    }, opts.ease);
+  }
+  window.tween = tween; window.cnt = cnt;
+
+  /* ========== HUD ========== */
+  function _syncHUD(){
+    document.getElementById("prog").style.width = Math.min(100, __now / DUR * 100) + "%";
+    document.getElementById("tc").textContent = fmt(__now) + " / " + fmt(DUR);
+  }
+  function fmt(ms){ const s = Math.floor(ms / 1000);
+    return String(Math.floor(s / 60)).padStart(2,"0") + ":" + String(s % 60).padStart(2,"0"); }
+  document.getElementById("pauseBtn").onclick = () => { _playing = false; };
+  document.getElementById("replayBtn").onclick = () => location.reload();
+
+  window.__startPlayback = begin;
+  window.__vtick = (ms) => { __now = ms; window.dispatchEvent(new CustomEvent("vtick", { detail: ms })); };
+
+  if (AUTOPLAY){ boot.style.display = "none"; begin(); }
+})();
+
+/* ============================================================
+   改这里⑤：本镜头叙事 cue（时间戳对齐口播，注释引用）
+   例：
+   // on(800,  () => document.getElementById("title").classList.add("in"));
+   // on(1500, () => sfx.ding());
+   // on(4200, () => camFocus(fx, fy, 1.18, 900));
+   ============================================================ */
+window._cue = function(){
+  // 在此写 cue
+};
+window._cue();
+</script>
+</body>
+</html>
