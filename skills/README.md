@@ -90,20 +90,39 @@ $env:NODE_EXTRA_CA_CERTS = 'D:\dsh\.dsh\steamtools-ca.pem'
 
 ## GitHub 同步
 
-- 已同步：远端 commit `9d14c5e53e27` — `skills/video-shot/`、`skills/shotplan/` 共 11 个文件，
-  逐字节核对一致。
-- **未同步**：本次新增的 `.githooks/`（密钥防护）。
-  原因：原先可用的 `gho_` 凭据已被撤销，`/user` 与 `/repos` 均返回 401。
-  等你有可用凭据后再跑一次 `D:\dsh\.dsh\gh-push.js` 即可补上。
+- **状态：已同步**。本目录内容与 `main` 分支一致，`skills/` 下 **17 个文件**逐字节核对通过
+- 同步历史：`9d14c5e53e27`（首次 11 个文件）→ `613656c8276c`（追加 `.githooks/`、`.gitattributes`、README）
+- 最新远端 commit 看 `https://github.com/NanMianG/NanMian-s-rep/commits/main`
+- 钩子权限位正确：`pre-commit` / `pre-push` = `100755`，`secret_scan.py` = `100644`
+- 行尾已钉死：`git check-attr` 显示 `.githooks/*` 为 `text eol=lf`，
+  仓库内 blob 的 CR 计数为 0 → 任何平台检出后 sh 钩子都不会因 CRLF 报错
+
+### GitHub 侧的安全防护状态（2026-10-01 实测查询）
+
+| 设置 | 状态 | 说明 |
+|---|---|---|
+| Secret scanning | **enabled** | 公开仓库默认开启 |
+| Push protection | **enabled** | 推送时即拦截，价值最高的一道闸 |
+| Dependabot alerts | **已启用** | 本次通过 API 打开（此前查询返回 404） |
+| Secret scanning 非提供方模式 | disabled | 仅网页可改 |
+| Validity checks | disabled | 仅网页可改 |
+| Dependabot security updates | disabled | 仅网页可改 |
+
+想再收紧，去 `https://github.com/NanMianG/NanMian-s-rep/settings/security_analysis`
+把「Non-provider patterns」与「Validity checks」打开——这两个没有公开 REST 接口。
 
 ### 为什么用 API 推送而不是 git push
 
-本机 **git 的 TLS 栈连 `github.com` 被重置**（罪魁是上面第 1 条，不是网络故障）。
-改用 GitHub REST API：`POST /git/blobs` → `POST /git/trees`(带 `base_tree`) →
+本机 GitHub 流量被 SteamTools 接管（见上文第 1 条），git 的 TLS 栈连 `github.com` 会被重置。
+改用 REST API：`POST /git/blobs` → `POST /git/trees`(带 `base_tree`) →
 `POST /git/commits` → `PATCH /git/refs/heads/main`。
 `base_tree` 保证不会覆盖仓库里已有的其它文件。
 
-脚本：`D:\dsh\.dsh\gh-push.js`（自动从 Windows 凭据管理器取凭据，不打印 token）。
+`D:\dsh\.dsh\gh-push.js` 支持两种取凭据方式：
+1. 环境变量 `DSH_GH_TOKEN`（临时 token，不落盘、不写凭据管理器，用完即撤）
+2. 否则回退到 `git credential fill`（Windows 凭据管理器）
+
+脚本幂等：远端内容与本机一致时不会造空提交。
 保留 SteamTools 加速时记得先设 `NODE_EXTRA_CA_CERTS`。
 
 ## 升级要点（相对原始版本）
