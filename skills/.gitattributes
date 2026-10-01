@@ -1,0 +1,4 @@
+# 钩子与扫描器必须保持 LF：sh 脚本带 CRLF 会在 Git Bash 下报错，
+# 而本机 core.autocrlf=true，不加这条下次检出就会被转成 CRLF。
+.githooks/* text eol=lf
+*.sh text eol=lf

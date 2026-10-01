@@ -1,0 +1,24 @@
+#!/bin/sh
+# 提交前密钥扫描：只扫暂存区的新增行。
+# 由 secret-guard 生成，逻辑在 secret_scan.py 里，改逻辑请改那里。
+set -e
+
+SCAN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PY=$(command -v python || command -v python3 || command -v py || true)
+
+if [ -z "$PY" ]; then
+  echo "[secret-scan] 警告：未找到 python，跳过密钥扫描" >&2
+  exit 0
+fi
+
+# 用 git 的顶层目录做扫描根目录（钩子可能在子目录里被触发）
+REPO=$(git rev-parse --show-toplevel)
+
+"$PY" "$SCAN_DIR/secret_scan.py" --staged --repo "$REPO"
+status=$?
+
+if [ "$status" -ne 0 ]; then
+  echo "" >&2
+  echo "[secret-guard] 已阻止提交。确认是误报可临时用： git commit --no-verify" >&2
+fi
+exit "$status"

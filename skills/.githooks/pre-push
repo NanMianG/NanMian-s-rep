@@ -1,0 +1,26 @@
+#!/bin/sh
+# 推送前密钥扫描：扫 HEAD 全部已跟踪文件，兜住"历史里已经存在的密钥"。
+# 这是最后一道闸——一旦推上 GitHub 就必须视为已泄漏。
+set -e
+
+SCAN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PY=$(command -v python || command -v python3 || command -v py || true)
+
+if [ -z "$PY" ]; then
+  echo "[secret-scan] 警告：未找到 python，跳过密钥扫描" >&2
+  exit 0
+fi
+
+REPO=$(git rev-parse --show-toplevel)
+
+"$PY" "$SCAN_DIR/secret_scan.py" --all --repo "$REPO"
+status=$?
+
+if [ "$status" -ne 0 ]; then
+  echo "" >&2
+  echo "[secret-guard] 已阻止推送。若密钥确实已进入历史：" >&2
+  echo "  1) 立刻在服务端吊销并轮换该密钥（改代码没用）" >&2
+  echo "  2) 再清理历史：git filter-repo --replace-text replacements.txt" >&2
+  echo "  3) 临时绕过： git push --no-verify" >&2
+fi
+exit "$status"
